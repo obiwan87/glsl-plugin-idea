@@ -7,6 +7,7 @@ import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 plugins {
     id("java")
     id("idea")
+    kotlin("plugin.serialization") version "2.2.0"
     alias(libs.plugins.kotlin) // Kotlin support
     alias(libs.plugins.intelliJPlatform) // IntelliJ Platform Gradle Plugin
     alias(libs.plugins.changelog) // Gradle Changelog Plugin
@@ -40,6 +41,35 @@ dependencies {
     }
     testImplementation(libs.junit)
     testImplementation(libs.opentest4j)
+
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0")
+
+    implementation(platform(libs.lwjgl.bom))
+    implementation(libs.lwjgl)
+    implementation(libs.lwjgl.opengl)
+    implementation(libs.lwjgl.jawt)
+
+    runtimeOnly("org.lwjgl:lwjgl::natives-windows")
+    runtimeOnly("org.lwjgl:lwjgl-opengl::natives-windows")
+
+    runtimeOnly("org.lwjgl:lwjgl::natives-linux")
+    runtimeOnly("org.lwjgl:lwjgl-opengl::natives-linux")
+
+    runtimeOnly("org.lwjgl:lwjgl::natives-macos")
+    runtimeOnly("org.lwjgl:lwjgl-opengl::natives-macos")
+
+    implementation(libs.lwjgl3.awt) {
+        isTransitive = false
+    }
+}
+
+configurations.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "org.lwjgl") {
+            useVersion(libs.versions.lwjgl.get())
+            because("All LWJGL artifacts must be compatible with lwjgl3-awt")
+        }
+    }
 }
 
 intellijPlatform {
@@ -64,6 +94,8 @@ intellijPlatform {
 }
 
 tasks {
+    val buildSearchableOptionsEnabled =
+        providers.gradleProperty("buildSearchableOptionsEnabled").map(String::toBoolean).orElse(false)
     compileJava {
         sourceCompatibility = JavaVersion.VERSION_21.majorVersion
         targetCompatibility = JavaVersion.VERSION_21.majorVersion
@@ -131,6 +163,35 @@ run {
         }
         compileKotlin {
             dependsOn("generateGrammarClean")
+        }
+
+        runIde { //diables kubenetes because its trash and dumps our logs with bullshit
+            maxHeapSize = "6g"
+
+            doFirst {
+                val disabledIds = listOf(
+                    "com.intellij.kubernetes",
+                )
+
+                val sandboxRoot = layout.buildDirectory.dir("idea-sandbox").get().asFile
+
+                val candidateConfigDirs = sandboxRoot
+                    .listFiles()
+                    ?.filter { it.isDirectory }
+                    ?.map { it.resolve("config") }
+                    ?.filter { it.isDirectory }
+                    .orEmpty()
+
+                val configDir = when {
+                    candidateConfigDirs.size == 1 -> candidateConfigDirs.single()
+                    candidateConfigDirs.isNotEmpty() -> candidateConfigDirs.maxBy { it.lastModified() } // nimm die "aktuellste"
+                    else -> sandboxRoot.resolve("config") // Fallback für ältere Layouts
+                }
+
+                configDir.mkdirs()
+                configDir.resolve("disabled_plugins.txt")
+                    .writeText(disabledIds.joinToString(System.lineSeparator()))
+            }
         }
     }
 }
